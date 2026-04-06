@@ -81,21 +81,21 @@ install_build_deps() {
             yum install -y \
                 wget tar make autoconf automake libtool pkgconfig \
                 zlib-devel xz-devel libzstd-devel \
-                python3 perl
+                python3 perl gettext
             ;;
         ubuntu20*)
             apt-get update -qq
             apt-get install -y \
                 wget tar make autoconf automake libtool pkg-config \
                 zlib1g-dev liblzma-dev libzstd-dev \
-                python3 perl nasm
+                python3 perl nasm gettext
             ;;
         ubuntu22*|ubuntu24*)
             apt-get update -qq
             apt-get install -y \
                 wget tar make autoconf automake libtool pkg-config \
                 zlib1g-dev liblzma-dev libzstd-dev \
-                python3 perl nasm
+                python3 perl nasm gettext
             ;;
         *)
             echo "WARNING: unknown OS '${OS_ID}', skipping automatic dep install."
@@ -166,7 +166,7 @@ fetch() {
     local url="$1" dest="$2"
     if [[ ! -f "${BUILD_DIR}/${dest}" ]]; then
         echo "  Downloading ${dest}..."
-        wget -q --show-progress -O "${BUILD_DIR}/${dest}" "${url}"
+        wget -q -O "${BUILD_DIR}/${dest}" "${url}"
     else
         echo "  Already downloaded: ${dest}"
     fi
@@ -418,9 +418,8 @@ echo
 echo "==> Configuring Icecast..."
 pushd "${SCRIPT_DIR}" >/dev/null
 
-if [[ ! -f configure ]]; then
-    autoreconf -fi
-fi
+# Always regenerate configure so it is compatible with the local automake
+autoreconf -fi
 
 # Re-run configure unconditionally so it picks up all our fresh deps
 ./configure \
