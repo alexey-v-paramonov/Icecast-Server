@@ -24,6 +24,10 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 # Configurable versions — update here when upstreams release new tarballs
 # ---------------------------------------------------------------------------
+VER_ZLIB=1.3.1
+VER_XZ=5.6.3
+VER_ZSTD=1.5.6
+VER_XCRYPT=4.4.36
 VER_OGG=1.3.5
 VER_VORBIS=1.3.7
 VER_SPEEX=1.2.1
@@ -181,6 +185,131 @@ extract() {
         echo "  Already extracted: ${dir}"
     fi
 }
+
+# ---------------------------------------------------------------------------
+# On CentOS 7 the system automake is 1.13.4 but libigloo requires >= 1.14.
+# Build and install a recent automake into the deps prefix.
+# ---------------------------------------------------------------------------
+VER_AUTOMAKE=1.16.5
+
+bootstrap_automake() {
+    echo
+    echo "==> Bootstrapping automake ${VER_AUTOMAKE} (CentOS 7 workaround)..."
+    fetch "https://ftp.gnu.org/gnu/automake/automake-${VER_AUTOMAKE}.tar.xz" \
+          "automake-${VER_AUTOMAKE}.tar.xz"
+    extract "automake-${VER_AUTOMAKE}.tar.xz" "automake-${VER_AUTOMAKE}"
+    pushd "${BUILD_DIR}/automake-${VER_AUTOMAKE}" >/dev/null
+        ./configure --prefix="${DEPS_PREFIX}"
+        make -j"${JOBS}"
+        make install
+    popd >/dev/null
+    echo "==> automake now: $(automake --version | head -1)"
+}
+
+if [[ "${OS_ID}" == centos7* ]]; then
+    bootstrap_automake
+fi
+
+# Ensure our private bin dir is always first on PATH (new automake, etc.)
+export PATH="${DEPS_PREFIX}/bin:${PATH}"
+
+# On CentOS 7 the bootstrapped aclocal must also search the system macro dir
+# so that standard autoconf macros (AC_MSG_ERROR etc.) are found.
+if [[ "${OS_ID}" == centos7* ]]; then
+    export ACLOCAL_PATH="/usr/share/aclocal${ACLOCAL_PATH:+:${ACLOCAL_PATH}}"
+fi
+
+# ---------------------------------------------------------------------------
+# 0a. zlib
+# ---------------------------------------------------------------------------
+echo
+echo "==> Building zlib ${VER_ZLIB}..."
+fetch "https://github.com/madler/zlib/releases/download/v${VER_ZLIB}/zlib-${VER_ZLIB}.tar.gz" \
+      "zlib-${VER_ZLIB}.tar.gz"
+extract "zlib-${VER_ZLIB}.tar.gz" "zlib-${VER_ZLIB}"
+pushd "${BUILD_DIR}/zlib-${VER_ZLIB}" >/dev/null
+    # zlib configure uses env-var CFLAGS, not a positional argument
+    CFLAGS="${COMMON_CFLAGS}" ./configure \
+        --prefix="${DEPS_PREFIX}" \
+        --static
+    make -j"${JOBS}"
+    make install
+popd >/dev/null
+
+# ---------------------------------------------------------------------------
+# 0b. xz / liblzma
+# ---------------------------------------------------------------------------
+echo
+echo "==> Building xz ${VER_XZ}..."
+fetch "https://github.com/tukaani-project/xz/releases/download/v${VER_XZ}/xz-${VER_XZ}.tar.gz" \
+      "xz-${VER_XZ}.tar.gz"
+extract "xz-${VER_XZ}.tar.gz" "xz-${VER_XZ}"
+pushd "${BUILD_DIR}/xz-${VER_XZ}" >/dev/null
+    ./configure \
+        --prefix="${DEPS_PREFIX}" \
+        --enable-static \
+        --disable-shared \
+        --disable-xz \
+        --disable-xzdec \
+        --disable-lzmadec \
+        --disable-lzmainfo \
+        --disable-scripts \
+        --disable-doc \
+        CFLAGS="${COMMON_CFLAGS}"
+    make -j"${JOBS}"
+    make install
+popd >/dev/null
+
+# ---------------------------------------------------------------------------
+# 0c. zstd
+# ---------------------------------------------------------------------------
+echo
+echo "==> Building zstd ${VER_ZSTD}..."
+fetch "https://github.com/facebook/zstd/releases/download/v${VER_ZSTD}/zstd-${VER_ZSTD}.tar.gz" \
+      "zstd-${VER_ZSTD}.tar.gz"
+extract "zstd-${VER_ZSTD}.tar.gz" "zstd-${VER_ZSTD}"
+pushd "${BUILD_DIR}/zstd-${VER_ZSTD}" >/dev/null
+    # Build only the static library using zstd's lib Makefile
+    make -j"${JOBS}" -C lib libzstd.a \
+        CC="${CC_CMD}" CFLAGS="${COMMON_CFLAGS}"
+    cp lib/libzstd.a "${DEPS_PREFIX}/lib/"
+    mkdir -p "${DEPS_PREFIX}/include"
+    cp lib/zstd.h lib/zstd_errors.h lib/zdict.h "${DEPS_PREFIX}/include/"
+    # Generate pkg-config file
+    mkdir -p "${DEPS_PREFIX}/lib/pkgconfig"
+    cat > "${DEPS_PREFIX}/lib/pkgconfig/libzstd.pc" <<EOF
+prefix=${DEPS_PREFIX}
+exec_prefix=\${prefix}
+libdir=\${prefix}/lib
+includedir=\${prefix}/include
+
+Name: libzstd
+Description: fast lossless compression algorithm library
+Version: ${VER_ZSTD}
+Libs: -L\${libdir} -lzstd
+Cflags: -I\${includedir}
+EOF
+popd >/dev/null
+
+# ---------------------------------------------------------------------------
+# 0d. libxcrypt  (self-contained crypt_r — replaces NSS-backed system libcrypt
+#               on CentOS 7 which cannot be statically linked)
+# ---------------------------------------------------------------------------
+echo
+echo "==> Building libxcrypt ${VER_XCRYPT}..."
+fetch "https://github.com/besser82/libxcrypt/releases/download/v${VER_XCRYPT}/libxcrypt-${VER_XCRYPT}.tar.xz" \
+      "libxcrypt-${VER_XCRYPT}.tar.xz"
+extract "libxcrypt-${VER_XCRYPT}.tar.xz" "libxcrypt-${VER_XCRYPT}"
+pushd "${BUILD_DIR}/libxcrypt-${VER_XCRYPT}" >/dev/null
+    ./configure \
+        --prefix="${DEPS_PREFIX}" \
+        --enable-static \
+        --disable-shared \
+        --disable-werror \
+        CFLAGS="${COMMON_CFLAGS}"
+    make -j"${JOBS}"
+    make install
+popd >/dev/null
 
 # ---------------------------------------------------------------------------
 # 1. libogg
@@ -399,13 +528,11 @@ fetch "https://gitlab.xiph.org/xiph/icecast-libigloo/-/archive/v${VER_IGLOO}/ice
       "icecast-libigloo-v${VER_IGLOO}.tar.gz"
 extract "icecast-libigloo-v${VER_IGLOO}.tar.gz" "icecast-libigloo-v${VER_IGLOO}"
 pushd "${BUILD_DIR}/icecast-libigloo-v${VER_IGLOO}" >/dev/null
-    if [[ ! -f configure ]]; then
-        autoreconf -fi
-    fi
+    # Always re-run autoreconf to regenerate build-aux files with the local
+    # automake (important on CentOS 7 where we bootstrapped a newer automake)
+    autoreconf -fi
     ./configure \
         --prefix="${DEPS_PREFIX}" \
-        --enable-static \
-        --disable-shared \
         CFLAGS="${COMMON_CFLAGS}"
     make -j"${JOBS}"
     make install
@@ -433,24 +560,14 @@ autoreconf -fi
 echo
 echo "==> Building static Icecast binary..."
 
-# Extra libs needed for a fully static link:
-#   -lm      math (vorbis, speex, xml2 xpath)
-#   -lz      zlib (xml2, curl)
-#   -llzma   liblzma (xml2 xzlib)
-#   -lzstd   zstd (openssl c_zstd — even when openssl built without it,
-#            system libcrypto.a may have it; guard with a probe)
-EXTRA_LIBS="-lm -lz -llzma -lcrypt"
-
-# Probe for libzstd.a — add only if present (avoids "not found" error)
-if ${CC_CMD} -lzstd -shared -o /dev/null 2>/dev/null <<< 'int main(){}' || \
-   find /usr/lib /usr/lib64 /usr/lib/x86_64-linux-gnu \
-        -name "libzstd.a" 2>/dev/null | grep -q .; then
-    EXTRA_LIBS="${EXTRA_LIBS} -lzstd"
-fi
+# All transitive deps are built from source into DEPS_PREFIX.
+# -ldl   : libcrypto.a(dso_dlfcn.o) calls dlopen/dlsym for engine loading
+# -lcrypt: resolves to our built libxcrypt (self-contained, no NSS dep)
+EXTRA_LIBS="-lm -lz -llzma -lzstd -lcrypt -ldl"
 
 make all \
     LDFLAGS="-all-static" \
-    LIBS="$(pkg-config --libs igloo libxml-2.0 libxslt vorbis ogg speex theora libcurl openssl librhash 2>/dev/null) -pthread ${EXTRA_LIBS}"
+    LIBS="$(pkg-config --libs igloo libxml-2.0 libxslt vorbis ogg speex theora libcurl openssl librhash libzstd 2>/dev/null) -pthread ${EXTRA_LIBS}"
 
 popd >/dev/null
 
