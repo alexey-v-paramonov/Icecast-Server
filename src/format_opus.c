@@ -24,6 +24,7 @@
 #include "metadata_xiph.h"
 #include "format_opus.h"
 #include "stats.h"
+#include "util.h"
 #include "refbuf.h"
 #include "client.h"
 
@@ -122,6 +123,28 @@ static refbuf_t *process_opus_page (ogg_state_t *ogg_info,
 }
 
 
+static void opus_set_tag (format_plugin_t *plugin, const char *tag, const char *in_value, const char *charset)
+{
+    ogg_state_t *ogg_info = plugin->_state;
+    char *value;
+
+    if (tag == NULL)
+    {
+        ogg_info->log_metadata = 1;
+        return;
+    }
+
+    value = util_conv_string (in_value, charset, "UTF-8");
+    if (value == NULL)
+        value = strdup (in_value);
+
+    if (strcmp(tag, "song") == 0)
+        tag = "title";
+
+    format_set_vorbiscomment(plugin, tag, value);
+    free (value);
+}
+
 ogg_codec_t *initial_opus_page (format_plugin_t *plugin, ogg_page *page)
 {
     ogg_state_t *ogg_info = plugin->_state;
@@ -146,6 +169,7 @@ ogg_codec_t *initial_opus_page (format_plugin_t *plugin, ogg_page *page)
     codec->codec_free = opus_codec_free;
     codec->name = "Opus";
     codec->headers = 1;
+    plugin->set_tag = opus_set_tag;
     format_ogg_attach_header (ogg_info, page);
     return codec;
 }
