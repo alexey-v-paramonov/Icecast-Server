@@ -134,12 +134,38 @@ static void opus_set_tag (format_plugin_t *plugin, const char *tag, const char *
         return;
     }
 
+    if (in_value == NULL)
+        return;
+
     value = util_conv_string (in_value, charset, "UTF-8");
     if (value == NULL)
         value = strdup (in_value);
 
     if (strcmp(tag, "song") == 0)
+    {
+        /* "song" carries the combined "artist - title" string. Clear any existing
+         * ARTIST entry so ogg_update_stats doesn't prepend it and produce
+         * "Artist - Artist - Title". The correct ARTIST will be restored from the
+         * OpusTags of the upcoming Ogg chain restart. */
+        if (vorbis_comment_query_count(&plugin->vc, "artist") > 0)
+        {
+            vorbis_comment vc;
+            int i;
+            vorbis_comment_init(&vc);
+            for (i = 0; i < plugin->vc.comments; i++)
+            {
+                if (strncasecmp(plugin->vc.user_comments[i], "artist", 6) == 0 &&
+                    plugin->vc.user_comments[i][6] == '=')
+                    continue;
+                vorbis_comment_add(&vc, plugin->vc.user_comments[i]);
+            }
+            vc.vendor = plugin->vc.vendor;
+            plugin->vc.vendor = NULL;
+            vorbis_comment_clear(&plugin->vc);
+            plugin->vc = vc;
+        }
         tag = "title";
+    }
 
     format_set_vorbiscomment(plugin, tag, value);
     free (value);
