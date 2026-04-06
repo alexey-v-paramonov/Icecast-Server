@@ -12,4 +12,4 @@ doc_DATA = README.md AUTHORS COPYING NEWS ChangeLog
 dist_pkgdata_DATA = report-db.xml
 
 static:
-	$(MAKE) all LDFLAGS="${LDFLAGS} -all-static"
+	$(MAKE) all LDFLAGS="${LDFLAGS} -all-static" LIBS="${LIBS} -lm -lz -llzma -lzstd -lmvec"
