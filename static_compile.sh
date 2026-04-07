@@ -557,6 +557,11 @@ autoreconf -fi
     CC="${CC_CMD}" \
     CFLAGS="${COMMON_CFLAGS}"
 
+# configure may not detect xsltSaveResultToString when libxslt is not on the
+# default search path.  Force the flag so the #ifndef guard in src/xslt.c
+# does NOT emit a second definition that collides with the one in libxslt.a.
+sed -i 's|.*#undef HAVE_XSLTSAVERESULTTOSTRING.*|#define HAVE_XSLTSAVERESULTTOSTRING 1|' config.h
+
 echo
 echo "==> Building static Icecast binary..."
 
@@ -564,6 +569,7 @@ echo "==> Building static Icecast binary..."
 # -ldl   : libcrypto.a(dso_dlfcn.o) calls dlopen/dlsym for engine loading
 # -lcrypt: resolves to our built libxcrypt (self-contained, no NSS dep)
 EXTRA_LIBS="-lm -lz -llzma -lzstd -lcrypt -ldl"
+
 
 make all \
     LDFLAGS="-all-static" \
