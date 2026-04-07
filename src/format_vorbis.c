@@ -364,19 +364,25 @@ ogg_codec_t *initial_vorbis_page (format_plugin_t *plugin, ogg_page *page)
 
     ogg_stream_packetout (&codec->os, &packet);
 
-    vorbis_comment_clear(&plugin->vc);
-    vorbis_comment_init(&plugin->vc);
+    /* Use a temp vorbis_comment for detection so we don't clear plugin->vc
+     * (which may hold metadata set via set_tag for other codec types, e.g.
+     * FLAC) unless we are certain this is a Vorbis stream. */
+    vorbis_comment temp_vc;
+    vorbis_comment_init (&temp_vc);
 
     ICECAST_LOG_DEBUG("checking for vorbis codec");
-    if (vorbis_synthesis_headerin (&vorbis->vi, &plugin->vc, &packet) < 0)
+    if (vorbis_synthesis_headerin (&vorbis->vi, &temp_vc, &packet) < 0)
     {
         ogg_stream_clear (&codec->os);
         vorbis_info_clear (&vorbis->vi);
-        vorbis_comment_clear (&plugin->vc);
+        vorbis_comment_clear (&temp_vc);
         free (vorbis);
         free (codec);
         return NULL;
     }
+    /* Confirmed Vorbis — install the parsed comment into plugin->vc */
+    vorbis_comment_clear (&plugin->vc);
+    plugin->vc = temp_vc;
     ICECAST_LOG_INFO("seen initial vorbis header");
     codec->specific = vorbis;
     codec->codec_free = vorbis_codec_free;

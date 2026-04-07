@@ -695,6 +695,7 @@ static void check_servers (void)
             source_t *source = node->key;
             if (source->yp_public && (yp = create_yp_entry (server, source->mount)) != NULL) {
                 ICECAST_LOG_DEBUG("Adding existing mount %s", source->mount);
+                yp->server = server;
                 yp->touch_interval = server->touch_interval;
                 yp->next = server->mounts;
                 server->mounts = yp;

@@ -1415,7 +1415,6 @@ static void command_metadata(client_t *client,
     } else {
         ICECAST_LOG_ERROR("Got legacy shoutcast-style metadata update command "
             "on source that does not accept it at mountpoint %H", source->mount);
-        source_set_flags(source, SOURCE_FLAG_LEGACY_METADATA);
 
         admin_send_response_simple(client, source, response, "Mountpoint will not accept URL updates", 1);
         return;
