@@ -46,14 +46,18 @@ JOBS=$(nproc)
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DEPS_PREFIX="${SCRIPT_DIR}/static-deps"
 OUTPUT_BINARY="${SCRIPT_DIR}/icecast-static"
+VALGRIND_BUILD=0   # 0 = fully static; 1 = dynamic glibc (Valgrind-friendly)
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --jobs)   JOBS="$2"; shift 2 ;;
-        --prefix) DEPS_PREFIX="$2"; shift 2 ;;
-        --output) OUTPUT_BINARY="$2"; shift 2 ;;
+        --jobs)     JOBS="$2"; shift 2 ;;
+        --prefix)   DEPS_PREFIX="$2"; shift 2 ;;
+        --output)   OUTPUT_BINARY="$2"; shift 2 ;;
+        --valgrind) VALGRIND_BUILD=1; shift ;;
         --help)
-            echo "Usage: $0 [--jobs N] [--prefix PATH] [--output PATH]"
+            echo "Usage: $0 [--jobs N] [--prefix PATH] [--output PATH] [--valgrind]"
+            echo "  --valgrind  Build a dynamically-linked binary for use with Valgrind."
+            echo "              Drops -all-static so glibc wrappers work; deps remain static."
             exit 0
             ;;
         *) echo "Unknown option: $1"; exit 1 ;;
@@ -533,7 +537,10 @@ pushd "${BUILD_DIR}/icecast-libigloo-v${VER_IGLOO}" >/dev/null
     autoreconf -fi
     ./configure \
         --prefix="${DEPS_PREFIX}" \
-        CFLAGS="${COMMON_CFLAGS}"
+        --enable-static \
+        --disable-shared \
+        CFLAGS="${COMMON_CFLAGS}" \
+        LIBS="-lm"
     make -j"${JOBS}"
     make install
 popd >/dev/null
@@ -548,6 +555,12 @@ pushd "${SCRIPT_DIR}" >/dev/null
 # Always regenerate configure so it is compatible with the local automake
 autoreconf -fi
 
+if [[ "${VALGRIND_BUILD}" -eq 1 ]]; then
+    ICECAST_CFLAGS="-O0 -g3 -march=x86-64 -fPIC"
+else
+    ICECAST_CFLAGS="-O3 -march=x86-64 -fPIC"
+fi
+
 # Re-run configure unconditionally so it picks up all our fresh deps
 ./configure \
     --prefix="/usr" \
@@ -555,7 +568,8 @@ autoreconf -fi
     --with-openssl \
     --enable-yp \
     CC="${CC_CMD}" \
-    CFLAGS="${COMMON_CFLAGS}"
+    CFLAGS="${ICECAST_CFLAGS}" \
+    LIBS="-ldl"
 
 # configure may not detect xsltSaveResultToString when libxslt is not on the
 # default search path.  Force the flag so the #ifndef guard in src/xslt.c
@@ -563,16 +577,33 @@ autoreconf -fi
 sed -i 's|.*#undef HAVE_XSLTSAVERESULTTOSTRING.*|#define HAVE_XSLTSAVERESULTTOSTRING 1|' config.h
 
 echo
-echo "==> Building static Icecast binary..."
+if [[ "${VALGRIND_BUILD}" -eq 1 ]]; then
+    echo "==> Building Valgrind-friendly Icecast binary (dynamically linked glibc)..."
+else
+    echo "==> Building static Icecast binary..."
+fi
 
 # All transitive deps are built from source into DEPS_PREFIX.
 # -ldl   : libcrypto.a(dso_dlfcn.o) calls dlopen/dlsym for engine loading
 # -lcrypt: resolves to our built libxcrypt (self-contained, no NSS dep)
 EXTRA_LIBS="-lm -lz -llzma -lzstd -lcrypt -ldl"
 
+# CentOS 7: statically linking glibc causes NSS segfaults because glibc's
+# resolver dlopen()s libnss_files.so at runtime and the in-process struct
+# layout expected by the static glibc differs from the system .so (observed
+# as "segfault at 63" in libnss_files-2.17.so).  All custom deps are built
+# with --disable-shared so only .a files exist in DEPS_PREFIX; the linker uses
+# them statically even without -all-static.  Glibc stays dynamic on CentOS 7.
+if [[ "${VALGRIND_BUILD}" -eq 1 ]]; then
+    ICECAST_LDFLAGS="-Wl,-rpath,${DEPS_PREFIX}/lib"
+elif [[ "${OS_ID}" == centos7* ]]; then
+    ICECAST_LDFLAGS=""
+else
+    ICECAST_LDFLAGS="-all-static"
+fi
 
 make all \
-    LDFLAGS="-all-static" \
+    LDFLAGS="${ICECAST_LDFLAGS}" \
     LIBS="$(pkg-config --libs igloo libxml-2.0 libxslt vorbis ogg speex theora libcurl openssl librhash libzstd 2>/dev/null) -pthread ${EXTRA_LIBS}"
 
 popd >/dev/null
@@ -581,7 +612,7 @@ popd >/dev/null
 # Copy result to output path
 # ---------------------------------------------------------------------------
 cp -f "${SCRIPT_DIR}/src/icecast" "${OUTPUT_BINARY}"
-strip "${OUTPUT_BINARY}"
+# strip "${OUTPUT_BINARY}"
 
 echo
 echo "==> Done. Static binary: ${OUTPUT_BINARY}"
