@@ -6,6 +6,7 @@
 #   Ubuntu 20.04 (requires gcc-11, e.g. from ubuntu-toolchain-r/test PPA)
 #   Ubuntu 22.04
 #   Ubuntu 24.04
+#   Ubuntu 26.04
 #
 # Usage:
 #   ./static_compile.sh [--jobs N] [--prefix /path]
@@ -98,7 +99,7 @@ install_build_deps() {
                 zlib1g-dev liblzma-dev libzstd-dev \
                 python3 perl nasm gettext
             ;;
-        ubuntu22*|ubuntu24*)
+        ubuntu22*|ubuntu24*|ubuntu26*)
             apt-get update -qq
             apt-get install -y \
                 wget tar make autoconf automake libtool pkg-config \
@@ -114,6 +115,32 @@ install_build_deps() {
 echo "==> Detected OS: ${OS_ID}"
 echo "==> Installing build-time system dependencies..."
 install_build_deps
+
+# ---------------------------------------------------------------------------
+# Clear the deps prefix if it was populated on a different OS. A stamp file
+# records which OS last built it. Mixing hurts twice over: the static archives
+# would carry another glibc's struct layouts, and the private automake that the
+# CentOS 7 path bootstraps into ${DEPS_PREFIX}/bin (see below) would shadow a
+# newer host automake on PATH — autoreconf then fails with "possibly undefined
+# macro: AC_MSG_ERROR" when aclocal and autoconf disagree on versions.
+# ---------------------------------------------------------------------------
+OS_STAMP="${DEPS_PREFIX}/.built-on-os"
+if [[ -f "${OS_STAMP}" ]]; then
+    PREV_OS=$(cat "${OS_STAMP}")
+    if [[ "${PREV_OS}" != "${OS_ID}" ]]; then
+        echo "==> WARNING: static-deps was built on '${PREV_OS}', current OS is '${OS_ID}'."
+        echo "==> Clearing static-deps to avoid mixing toolchains and glibc versions..."
+        rm -rf "${DEPS_PREFIX}"
+        mkdir -p "${BUILD_DIR}"
+    fi
+elif [[ -d "${DEPS_PREFIX}" ]]; then
+    # No stamp: written by a build that predates this check, so its origin is
+    # unknown. Wipe it rather than guess.
+    echo "==> WARNING: static-deps has no OS stamp (may have been built on a different OS)."
+    echo "==> Clearing static-deps to ensure a clean build..."
+    rm -rf "${DEPS_PREFIX}"
+    mkdir -p "${BUILD_DIR}"
+fi
 
 # ---------------------------------------------------------------------------
 # Detect GCC version and select compiler
@@ -613,6 +640,9 @@ popd >/dev/null
 # ---------------------------------------------------------------------------
 cp -f "${SCRIPT_DIR}/src/icecast" "${OUTPUT_BINARY}"
 # strip "${OUTPUT_BINARY}"
+
+# Record which OS populated static-deps so the next run can detect a mismatch.
+echo "${OS_ID}" > "${OS_STAMP}"
 
 echo
 echo "==> Done. Static binary: ${OUTPUT_BINARY}"
